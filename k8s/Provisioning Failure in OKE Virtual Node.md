@@ -70,5 +70,6 @@ When creating an OKE Virtual Node, the UI currently offers only shapes **A1** an
 
 ## References
 
-- OKE Virtual Nodes documentation
-- OCI compute shapes (A1, A4, A6) and regional capacity
+- [Comparing Virtual Nodes with Managed Nodes](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengcomparingvirtualwithmanagednodes_topic.htm#contengcomparingvirtualwithmanagednodes_topic-virtualnodes) — OKE documentation on virtual vs managed nodes, supported features, and limitations.
+- [Resources Allocated to Pods Provisioned by Virtual Nodes](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengvirtualnodepodresourceallocation.htm) — CPU, memory, and storage allocation for pods on virtual nodes.
+- [Getting Started & Best Practices: OKE Virtual Nodes](https://blogs.oracle.com/cloud-infrastructure/getting-started-best-practices-oke-virtual-nodes) — Oracle Cloud Infrastructure blog on virtual nodes setup and best practices.
