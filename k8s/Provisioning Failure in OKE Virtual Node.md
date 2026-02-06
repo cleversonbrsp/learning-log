@@ -68,6 +68,12 @@ When creating an OKE Virtual Node, the UI currently offers only shapes **A1** an
 
 ---
 
+## Resolved as
+
+Case closed with a **satisfactory outcome**. Oracle’s service team recommended not specifying fault domains when creating virtual node pools (leave fault domain empty in the console or in Terraform). That allows pods to be scheduled in any fault domain with available capacity. Together with the pipeline workaround (cordon + isolate + retry), mitigation for intermittent OKE Virtual Node provisioning failures is in place.
+
+---
+
 ## References
 
 - [Comparing Virtual Nodes with Managed Nodes](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengcomparingvirtualwithmanagednodes_topic.htm#contengcomparingvirtualwithmanagednodes_topic-virtualnodes) — OKE documentation on virtual vs managed nodes, supported features, and limitations.
