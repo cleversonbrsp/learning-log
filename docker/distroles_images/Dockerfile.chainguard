@@ -1,0 +1,17 @@
+# Build stage (use free tags: latest-dev / latest; version tags require Chainguard account)
+FROM cgr.dev/chainguard/python:latest-dev AS builder
+WORKDIR /app
+RUN python -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
+COPY app.py .
+RUN pip install --no-cache-dir streamlit Pillow
+
+# Final stage
+FROM cgr.dev/chainguard/python:latest
+EXPOSE 8501
+COPY --from=builder /app/venv /app/venv
+COPY --from=builder /app/app.py /app/app.py
+WORKDIR /app
+ENV PATH="/app/venv/bin:$PATH"
+ENTRYPOINT ["/app/venv/bin/python"]
+CMD ["-m", "streamlit", "run", "app.py", "--server.address=0.0.0.0"]
