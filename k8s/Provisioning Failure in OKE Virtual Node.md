@@ -13,7 +13,7 @@ Foi adicionado um workaround no pipeline: fazer cordon e isolar o rollout em um 
 
 ---
 
-## 🌐 English
+## 🇺🇸 English
 
 **issue:**
 Deployments running on OKE Virtual Nodes intermittently failed to provision new Pods during rollouts (e.g., after a new image revision), due to temporary lack of capacity in the underlying OCI infrastructure (region/availability domain). The error observed was: "cannot provision pod due to insufficient capacity". Since the new Pod never started, the rollout got stuck and eventually failed with "progress deadline exceeded" — even though the application and image were fine.

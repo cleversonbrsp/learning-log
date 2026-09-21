@@ -13,7 +13,7 @@ O incidente foi contido reduzindo os workers/consumers do connect para zero para
 
 ---
 
-## 🌐 English
+## 🇺🇸 English
 
 **issue:**
 An OCI managed Postgres backend became unstable under load (CPU/memory spikes, intermittent unavailability) while the connect application kept retrying and consuming from RabbitMQ, creating an avalanche effect: the RabbitMQ backlog grew, reconnections surged, and the database flapped even harder with every app restart, since connect would "pick everything at once" and collapse the system again.
