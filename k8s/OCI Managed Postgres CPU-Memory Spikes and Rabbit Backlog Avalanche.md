@@ -1,153 +1,38 @@
-# OCI Managed Postgres CPU-Memory Spikes and Rabbit Backlog Avalanche
+# 🐘 OCI Postgres × RabbitMQ – Avalanche de Backlog e Picos de CPU/Memória
 
-## Overview
+## 🇧🇷 Português (BR)
 
-An incident where an **OCI managed Postgres** backend becomes unstable under load (CPU/memory spikes and intermittent unavailability), while a Kubernetes application (**connect**) continues to retry and/or consume messages from **RabbitMQ**, creating an **avalanche effect**: backlog grows, reconnections surge, and the database flaps even harder.
+**issue:**
+Um backend Postgres gerenciado da OCI ficou instável sob carga (picos de CPU/memória, indisponibilidade intermitente) enquanto a aplicação connect continuava tentando reconectar e consumindo do RabbitMQ, criando um efeito avalanche: o backlog do RabbitMQ crescia, as reconexões aumentavam, e o banco oscilava ainda mais a cada restart da aplicação, já que o connect "pegava tudo de uma vez" e derrubava o sistema novamente.
 
-In practice, the fastest path to recovery is almost always:
+**causa raiz:**
+Vários loops de retroalimentação se reforçavam mutuamente: uma tempestade de retries (connect tentando agressivamente após erros do banco), uma avalanche de backlog (burst de "catch-up" do RabbitMQ quando a aplicação voltava) e o dimensionamento do connection pool (tamanho do pool × réplicas × workers excedendo o que o banco gerenciado suportava) — sem ramp-up ou backpressure, quando a aplicação reiniciava ela retomava o consumo total instantaneamente e disparava o colapso de novo.
 
-1. **Stop the source of pressure** (pause consumers / scale down connect),
-2. **Let the database stabilize**,
-3. **Remove/contain backlog triggers** (purge or isolate the queue),
-4. **Fix inconsistent “stuck” data states** (via SQL),
-5. **Ramp up the app gradually** to avoid re-triggering the avalanche.
-
----
-
-## Symptoms
-
-- OCI Postgres shows **CPU and memory spikes** and becomes intermittently unavailable.
-- Application pods restart or stall, often with connection/pool errors.
-- RabbitMQ queue (e.g., invoices/billing) grows quickly; retries increase publish/consume churn.
-- Each app restart makes things worse: when connect comes back, it “picks everything at once” and the system collapses again.
+**solução:**
+O incidente foi contido reduzindo os workers/consumers do connect para zero para tirar a pressão, aguardando o Postgres estabilizar, e então limpando (purge) a fila problemática do RabbitMQ para remover o gatilho de backlog. Estados de fatura "travados" no Postgres foram corrigidos via SQL (resetados para reprocessamento ou marcados como erro), e o connect voltou gradualmente (ramp-up), monitorando conexões do banco, profundidade da fila e taxa de erro antes de aumentar mais réplicas. Mitigações de longo prazo: backpressure/ramp-up nos consumers, retry com backoff exponencial + jitter, pools de conexão limitados, e uma rota de DLQ/quarentena para mensagens "venenosas".
 
 ---
 
-## Common Indicators (what you typically see)
+## 🇬🇧 English
 
-### In the app (Kubernetes / Lens)
+**issue:**
+An OCI managed Postgres backend became unstable under load (CPU/memory spikes, intermittent unavailability) while the connect application kept retrying and consuming from RabbitMQ, creating an avalanche effect: the RabbitMQ backlog grew, reconnections surged, and the database flapped even harder with every app restart, since connect would "pick everything at once" and collapse the system again.
 
-- Pods are healthy from Kubernetes’ perspective but **latency/timeouts** explode.
-- Pool saturation patterns: lots of concurrent DB connections, slow queries, request timeouts, elevated error rate.
-- Restarts can happen if the app runs out of memory or has aggressive liveness/readiness checks.
+**root cause:**
+Multiple reinforcing loops fed each other: a retry storm (connect retrying aggressively on DB errors), a backlog avalanche (RabbitMQ catch-up burst when the app came back), and connection pool sizing (pool size × replicas × workers exceeding what the managed DB could sustain) — with no ramp-up or backpressure when the app restarted, it resumed full consumption instantly and re-triggered the collapse.
 
-### In RabbitMQ (UI)
-
-- A specific queue is the main driver (e.g., “invoices”).
-- **Backlog increases** and does not drain; publish spikes; consumers may churn.
-
-### In Postgres (DBeaver)
-
-- Connections climb (sometimes rapidly) as app retries.
-- `pg_stat_activity` shows many sessions from the app, often waiting or timing out.
-- Queries that are normally fast become slow due to CPU pressure / IO contention / lock contention.
+**solution:**
+Contained the incident by scaling connect's workers/consumers down to stop the pressure, waited for Postgres to stabilize, then purged the problematic RabbitMQ queue to remove the backlog trigger. Fixed inconsistent "stuck" invoice states in Postgres via SQL (reset for reprocessing or marked as error), then brought connect back gradually (ramp-up), watching DB connections, queue depth and error rate before increasing replicas further. Longer-term mitigations: backpressure/ramp-up on consumers, retry with exponential backoff + jitter, bounded connection pools, and a DLQ/quarantine path for poison messages.
 
 ---
 
-## Root Cause and Context (most common pattern)
+## 🇪🇸 Español
 
-This class of incident often involves **multiple reinforcing loops**:
+**issue:**
+Un backend de Postgres administrado por OCI se volvió inestable bajo carga (picos de CPU/memoria, indisponibilidad intermitente) mientras la aplicación connect seguía reintentando y consumiendo de RabbitMQ, generando un efecto avalancha: el backlog de RabbitMQ crecía, las reconexiones aumentaban, y la base de datos fluctuaba aún más con cada reinicio de la aplicación, ya que connect "tomaba todo de una vez" y volvía a colapsar el sistema.
 
-- **Retry storm**: connect (or its workers) retries aggressively on DB errors, increasing connection churn.
-- **Backlog avalanche**: Rabbit backlog + “catch-up” behavior causes a burst of work when the app returns.
-- **Connection pool behavior**: pool size × replicas × workers becomes “too many connections”, pushing the managed DB past stability.
-- **No ramp-up / no backpressure**: when the app restarts, it resumes full consumption instantly.
+**causa raíz:**
+Varios bucles de retroalimentación se reforzaban entre sí: una tormenta de reintentos (connect reintentando agresivamente ante errores de la base de datos), una avalancha de backlog (ráfaga de "catch-up" de RabbitMQ cuando la aplicación volvía) y el dimensionamiento del connection pool (tamaño del pool × réplicas × workers superando lo que la base de datos administrada podía soportar) — sin ramp-up ni backpressure, al reiniciar la aplicación retomaba el consumo total de inmediato y volvía a disparar el colapso.
 
-Important: in **managed** Postgres you rarely “fix” the DB by manipulating the process directly; you fix it by **removing pressure** and waiting for the service to stabilize.
-
----
-
-## Solution (what worked in practice)
-
-### 1) Contain: stop pressure from connect
-
-Goal: stop new connections and stop consuming/publishing invoice messages.
-
-Typical action:
-
-- Scale **connect workers/consumers** down (often to zero) so the DB can recover.
-- If API and worker are separate, stop **only the worker** first to keep the API available.
-
-### 2) Wait for the database to stabilize
-
-Goal: restore a stable baseline before reintroducing load.
-
-Validation via DBeaver:
-
-- Confirm you can connect consistently.
-- Run only light checks initially (avoid expensive queries).
-
-### 3) Remove the backlog trigger in RabbitMQ
-
-Goal: prevent the “catch-up burst” from bringing the DB down again.
-
-Typical action:
-
-- Purge the problematic queue (fastest) **or**
-- Move messages to a DLQ/quarantine flow if available (safer, slower operationally).
-
-### 4) Fix “stuck” invoice states in Postgres
-
-Goal: remove inconsistent states that keep re-triggering retries and reprocessing loops.
-
-Typical action (SQL):
-
-- Identify invoices stuck in “PROCESSING” / “SENT” / “GENERATING” past a threshold.
-- Either reset them for a controlled reprocess later, or mark them as “ERROR” for manual triage.
-
-This is commonly the “I saved what I could; the rest was dropped/reset” part of the incident.
-
-### 5) Bring connect back with ramp-up
-
-Goal: avoid another avalanche.
-
-Typical action:
-
-- Start with minimal capacity (few replicas).
-- Watch DB connections, queue depth, and app error rate.
-- Increase replicas gradually only after the system is draining backlog and latency is stable.
-
----
-
-## Safe Simulation (to practice without breaking prod)
-
-You cannot (and should not) try to force a managed Postgres process crash. Instead, simulate the **same effect on the app**:
-
-### Simulation A: DB unavailability from the app’s perspective
-
-- Temporarily block or degrade connect → Postgres traffic (latency, loss, disconnects).
-- Observe:
-  - pool exhaustion patterns,
-  - retry behavior,
-  - queue growth,
-  - recovery behavior when the network is restored.
-
-### Simulation B: Backlog avalanche
-
-- Pre-fill a test queue with many “invoice” messages.
-- Bring consumers up without ramp-up and watch the catch-up burst.
-- Repeat with ramp-up and/or backpressure enabled; compare outcomes.
-
-### What “success” looks like in a drill
-
-- You can contain quickly (stop consumers first).
-- The DB stabilizes without prolonged flapping.
-- You can prevent re-triggering (queue isolation/purge/quarantine).
-- You can recover with gradual ramp-up, keeping latency and error rates within bounds.
-
----
-
-## Mitigation (prevent this class of incident)
-
-- **Backpressure / ramp-up**: consumers should start gradually and respect a max in-flight.
-- **Retry discipline**: exponential backoff + jitter; avoid synchronized retries.
-- **Connection limits**: pool size must be bounded per pod; total connections must fit the managed DB capacity.
-- **Queue hygiene**: DLQ/quarantine path for poison messages; avoid infinite requeue loops.
-- **Operational runbook**: “pause consumers → stabilize DB → isolate backlog → fix stuck states → ramp-up”.
-
----
-
-## Resolved as
-
-Incident mitigated by **stopping connect to remove pressure**, allowing the **managed Postgres** to stabilize, then **purging the invoice queue** to prevent backlog avalanche, followed by **resetting/adjusting stuck invoice statuses** and **bringing connect back gradually**.
-
+**solución:**
+El incidente se contuvo reduciendo los workers/consumers de connect a cero para quitar la presión, esperando a que Postgres se estabilizara, y luego purgando la cola problemática de RabbitMQ para eliminar el disparador del backlog. Los estados de factura "atascados" en Postgres se corrigieron vía SQL (reseteados para reprocesamiento o marcados como error), y connect volvió gradualmente (ramp-up), monitoreando conexiones de la base de datos, profundidad de la cola y tasa de error antes de aumentar más réplicas. Mitigaciones a largo plazo: backpressure/ramp-up en los consumers, retry con backoff exponencial + jitter, pools de conexión acotados, y una ruta de DLQ/cuarentena para mensajes "envenenados".

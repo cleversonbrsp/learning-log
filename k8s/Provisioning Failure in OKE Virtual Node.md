@@ -1,81 +1,38 @@
-# Provisioning Failure in OKE Virtual Node
+# ☸️ OKE – Falha de Provisionamento em Virtual Node (Capacity Constraint)
 
-## Overview
+## 🇧🇷 Português (BR)
 
-Intermittent provisioning failures occur during deployments when workloads run on **Oracle Kubernetes Engine (OKE)** using **Virtual Nodes**. When a Deployment is updated (e.g., new image revision), the new Pod may fail to provision due to temporary lack of capacity in the underlying OCI infrastructure (region or availability domain, such as AD).
+**issue:**
+Deployments rodando em Virtual Nodes do OKE falhavam intermitentemente ao provisionar novos Pods durante rollouts (por exemplo, após uma nova revisão de imagem), por falta temporária de capacidade na infraestrutura da OCI (região/availability domain). O erro observado era: "cannot provision pod due to insufficient capacity". Como o novo Pod nunca subia, o rollout ficava travado e eventualmente falhava com "progress deadline exceeded" — mesmo com a aplicação e a imagem corretas.
 
-In these cases, the Pod does not start correctly and the Deployment rollout can block, leading to a **progress deadline exceeded** error. The root cause is not the application but the dynamic capacity provisioning of the Virtual Node.
+**causa raiz:**
+A falha não era causada pela aplicação, mas pelo provisionamento dinâmico de capacidade dos Virtual Nodes do OKE: no momento do rollout, o fault domain/availability domain escolhido pelo scheduler estava temporariamente sem capacidade disponível. A orientação da Oracle também apontou que o shape A4 estava depreciado (recomendando o A6), e que especificar um fault domain explícito na criação do virtual node pool reduzia a flexibilidade de agendamento, tornando o problema mais provável.
 
----
-
-## Symptoms
-
-- New Pods fail to start after a Deployment revision.
-- Rollout remains stuck; progress deadline may be exceeded.
-- Errors indicate insufficient capacity rather than application or image issues.
+**solução:**
+Foi adicionado um workaround no pipeline: fazer cordon e isolar o rollout em um único node, e fazer retry apenas em falhas transitórias de provisionamento (nunca para erros de aplicação/configuração) — cada retry dispara um novo ciclo de agendamento que pode cair em capacidade disponível em outro lugar. Foi feita escalação com a Oracle, que recomendou deixar o fault domain vazio na criação dos virtual node pools, permitindo que os pods sejam agendados em qualquer fault domain com capacidade. Combinado com a lógica de retry/isolamento do pipeline, isso resolveu as falhas intermitentes.
 
 ---
 
-## Common Errors
+## 🇬🇧 English
 
-```
-Error creating pod: [cannot provision pod due to insufficient capacity]
-```
+**issue:**
+Deployments running on OKE Virtual Nodes intermittently failed to provision new Pods during rollouts (e.g., after a new image revision), due to temporary lack of capacity in the underlying OCI infrastructure (region/availability domain). The error observed was: "cannot provision pod due to insufficient capacity". Since the new Pod never started, the rollout got stuck and eventually failed with "progress deadline exceeded" — even though the application and image were fine.
 
----
+**root cause:**
+The failure was not caused by the application, but by OKE Virtual Nodes' dynamic capacity provisioning: at rollout time, the fault domain/availability domain the scheduler picked temporarily had no capacity available. Oracle's guidance also flagged that shape A4 was deprecated (A6 recommended), and that specifying a fault domain explicitly at virtual node pool creation reduced scheduling flexibility, making the problem more likely.
 
-## Pipeline workaround
-
-Because this issue is caused by temporary capacity limits in the infrastructure backing Virtual Nodes, a **workaround** was added to our pipelines.
-
-### Approach
-
-1. **Cordon and isolate to a single node**  
-   Before or during the rollout, the pipeline cordons and isolates the workload to a single node. This reduces scheduling spread and makes retries more predictable.
-
-2. **Retry for transient failures only**  
-   In the pipelines, **retry does not fix application or configuration errors**; it is used only to **mitigate transient provisioning failures**. Each restart starts a new scheduling cycle, which may place the Pod on different available infrastructure and succeed when capacity was temporarily unavailable elsewhere.
-
-3. **Resilience vs. root cause**  
-   This approach improves the resilience of the deploy process while the root cause—cloud capacity—cannot be controlled directly.
-
-### Summary
-
-| Aspect | Description |
-|--------|-------------|
-| **Trigger** | Temporary lack of capacity in OCI/Virtual Node infrastructure |
-| **Mechanism** | Cordon + isolate to one node; retry on provisioning failure |
-| **Retry purpose** | Transient provisioning only (not app/config fixes) |
-| **Effect** | New scheduling cycle per restart; Pod may land on available capacity |
+**solution:**
+Added a pipeline workaround: cordon and isolate the rollout to a single node, and retry only on transient provisioning failures (never for application/config errors) — each retry triggers a new scheduling cycle that can land on available capacity elsewhere. Escalated with Oracle, who recommended leaving the fault domain empty when creating virtual node pools, letting pods be scheduled across any fault domain with capacity. Combined with the pipeline retry/isolation logic, this resolved the intermittent failures.
 
 ---
 
-## Oracle Guidance on Virtual Node Shapes
+## 🇪🇸 Español
 
-During meetings with Oracle, the recommendation was to use **shape A6** instead of **A4**, as A4 is no longer supported.
+**issue:**
+Los Deployments que corrían en Virtual Nodes de OKE fallaban intermitentemente al aprovisionar nuevos Pods durante los rollouts (por ejemplo, tras una nueva revisión de imagen), debido a la falta temporal de capacidad en la infraestructura de OCI (región/availability domain). El error observado era: "cannot provision pod due to insufficient capacity". Como el nuevo Pod nunca llegaba a iniciar, el rollout quedaba bloqueado y finalmente fallaba con "progress deadline exceeded" — aunque la aplicación y la imagen estaban correctas.
 
-When creating an OKE Virtual Node, the UI currently offers only shapes **A1** and **A4**. If A6 is required for support and capacity, this may need to be requested or configured via Oracle support or updated OKE/OCI APIs.
+**causa raíz:**
+La falla no era causada por la aplicación, sino por el aprovisionamiento dinámico de capacidad de los Virtual Nodes de OKE: en el momento del rollout, el fault domain/availability domain elegido por el scheduler no tenía capacidad disponible temporalmente. La orientación de Oracle también señaló que el shape A4 estaba obsoleto (se recomendaba A6), y que especificar un fault domain explícito al crear el virtual node pool reducía la flexibilidad de programación, haciendo el problema más probable.
 
----
-
-## Mitigation
-
-- **Pipeline workaround:** Use cordon + isolate to a single node and retry on provisioning failure (see [Pipeline workaround](#pipeline-workaround)). Retries target transient capacity issues only, not application or configuration errors.
-- Prefer supported shapes (e.g., A6) where available; avoid deprecated shapes (e.g., A4).
-- Retry the rollout after a short delay when capacity errors occur; they are often transient.
-- Consider spreading workloads across availability domains or regions if capacity is frequently constrained in one location.
-- Escalate to Oracle support if A6 (or other required shapes) are not available in the OKE Virtual Node creation flow.
-
----
-
-## Resolved as
-
-Case closed with a **satisfactory outcome**. Oracle’s service team recommended not specifying fault domains when creating virtual node pools (leave fault domain empty in the console or in Terraform). That allows pods to be scheduled in any fault domain with available capacity. Together with the pipeline workaround (cordon + isolate + retry), mitigation for intermittent OKE Virtual Node provisioning failures is in place.
-
----
-
-## References
-
-- [Comparing Virtual Nodes with Managed Nodes](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengcomparingvirtualwithmanagednodes_topic.htm#contengcomparingvirtualwithmanagednodes_topic-virtualnodes) — OKE documentation on virtual vs managed nodes, supported features, and limitations.
-- [Resources Allocated to Pods Provisioned by Virtual Nodes](https://docs.oracle.com/en-us/iaas/Content/ContEng/Tasks/contengvirtualnodepodresourceallocation.htm) — CPU, memory, and storage allocation for pods on virtual nodes.
-- [Getting Started & Best Practices: OKE Virtual Nodes](https://blogs.oracle.com/cloud-infrastructure/getting-started-best-practices-oke-virtual-nodes) — Oracle Cloud Infrastructure blog on virtual nodes setup and best practices.
+**solución:**
+Se agregó un workaround en el pipeline: hacer cordon y aislar el rollout a un único nodo, y reintentar solo ante fallas transitorias de aprovisionamiento (nunca para errores de aplicación/configuración) — cada reintento dispara un nuevo ciclo de programación que puede caer en capacidad disponible en otro lugar. Se escaló con Oracle, quien recomendó dejar el fault domain vacío al crear los virtual node pools, permitiendo que los pods se programen en cualquier fault domain con capacidad. Combinado con la lógica de retry/aislamiento del pipeline, esto resolvió las fallas intermitentes.

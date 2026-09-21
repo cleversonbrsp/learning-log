@@ -1,6 +1,8 @@
 # learning-log
 Real problems, real solutions. A growing collection of what I debugged and learned.
 
+Each write-up mirrors the same structure used in my personal Notion portfolio: a themed title, followed by `issue` / `root cause` / `solution` in three languages (🇧🇷 Português, 🇬🇧 English, 🇪🇸 Español).
+
 ## Topics
 
 - `k8s/`
