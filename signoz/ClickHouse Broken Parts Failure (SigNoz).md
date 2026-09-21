@@ -13,7 +13,7 @@ Foi adicionado um snippet de configuração merge_tree.xml aumentando o max_susp
 
 ---
 
-## 🇬🇧 English
+## 🌐 English
 
 **issue:**
 The cleanup-signoz-servers pipeline and interactive ClickHouse access started failing when querying the SigNoz ClickHouse instance, because one or more MergeTree tables (e.g. `signoz_traces.top_level_operations`) could not be loaded. The server returned Code 231 (TOO_MANY_UNEXPECTED_DATA_PARTS): the number of broken parts exceeded the default max_suspicious_broken_parts limit (100). Any query touching `system.parts` — including the pipeline's cleanup queries — failed as soon as one table couldn't attach.
